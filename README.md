@@ -1,6 +1,6 @@
 # Reinforcement learning with Generative Neural Networks
 
-Training RL agent using derivative of GAN modelling jointly environment and reward. Run "example.py" to see it working.
+Training Reinforcement Learning agent using derivative of Generative Recurrent Neural Network which models jointly environment and reward. Run "example.py" to see it working.
 
 It is assumed that environment observation is a vector. Currently for simplicity episodes of fixed size are taken (variable lenght can be achieved with padding).
 
