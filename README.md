@@ -1,6 +1,6 @@
 # Reinforcement learning with Generative Neural Networks
 
-Chainer implementation of reinforcement learning utilizing GANs. To see it in action, run "example.py".
+Chainer implementation of reinforcement learning via differentiation of GAN model of environment and reward. To see it in action, run "example.py".
 
 It is assumed that environment observation is a vector. Currently for simplicity episodes of fixed size are taken (variable lenght can be achieved with padding).
 
