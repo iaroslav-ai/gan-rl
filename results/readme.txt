@@ -1,0 +1,1 @@
+The results of the example with default settings will be saved in the current folder.
