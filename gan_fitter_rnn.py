@@ -52,7 +52,7 @@ def tv(x, v = flag.OFF):
 
 from time import time
 
-def FitStochastic(G, D, XY, iters):
+def FitStochastic(G, D, XY, learning_rate, momentum, iters):
 
     X, Y = XY
 
@@ -60,8 +60,8 @@ def FitStochastic(G, D, XY, iters):
 
     objD, objG = DOBJ(), GOBJ()
 
-    optG = optimizers.Adam(alpha=0.0001, beta1=0.3)
-    optD = optimizers.Adam(alpha=0.0001, beta1=0.3)
+    optG = optimizers.Adam(alpha=learning_rate, beta1=momentum)
+    optD = optimizers.Adam(alpha=learning_rate, beta1=momentum)
 
     optG.setup(G)
     optD.setup(D)
@@ -82,7 +82,7 @@ def FitStochastic(G, D, XY, iters):
 
 
         if i % 100 == 0:
-            print i, time()-st
+            print "iter:", i, "iter. time:", time()-st
             st = time()
 
             G.reset_state()
@@ -111,6 +111,6 @@ def FitStochastic(G, D, XY, iters):
                     res[rep, mrep] = np.mean(v)
 
             tr_perf = np.mean(np.min(res, axis=1))
-            print tr_perf
+            print "Error estimate:", tr_perf
 
 

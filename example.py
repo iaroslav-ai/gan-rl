@@ -32,6 +32,13 @@ class GeneratorNet(Chain):
         h = self.ipt(h)
         y = self.out(h)
 
+        # prior knowledge: environment observation is one - hot vector
+        obs = F.softmax(y[:, :-1])
+        # prior knowledge: reward is in [0,1]
+        rew = F.sigmoid(y[:,[-1]])
+
+        y = F.concat([obs, rew])
+
         return y
 
     def predict(self, X):
@@ -136,6 +143,9 @@ class RNNAgent(Chain):
         h = self.ipt(X)
         y = self.out(h)
 
+        # prior knowledge: output should be in [0, 1]
+        y = F.sigmoid(y)
+
         return y
 
     def next(self, X):
@@ -149,6 +159,21 @@ class RNNAgent(Chain):
 
         return Y
 
+# ground truth agent. Achieves aroun 0.62 average reward
+class DummyAgent(Chain):
+    def __init__(self, x_sz, layer_sz, act_sz):
+        self.x_sz = x_sz
+
+    def reset_state(self):
+        pass
+
+    def __call__(self, X):
+        return None
+
+    def next(self, X):
+        X = np.argmax(X, axis=1)
+        Y = X != self.x_sz-1
+        return [Y*1.0]
 
 # collect the data about env
 def generate_data(agent, env, N, act_size):
@@ -190,7 +215,7 @@ def generate_data(agent, env, N, act_size):
         X.append(np.array(x))
         Y.append(np.array(y))
 
-    return X, Y, np.mean(R)
+    return X, Y, np.mean(np.array(R)[:,1:])
 
 # warning: below function should be used during training only - agent(observ) returns Chainer tensor
 def evaluate_on_diff_env(diff_env, n_sample_traj, agent, steps):
@@ -218,11 +243,13 @@ rnd_sz = 2 # amount of randomness per agent
 state_size = 4 # size of state of the environment
 act_size = 1  # this encodes actions
 N_real_samples = 128 # number of samples from real environment
-GAN_training_iter = 8096 # grad. descent number of iterations to train GAN
+GAN_training_iter = 2048 # grad. descent number of iterations to train GAN
 N_GAN_samples = 256 # number of trajectories for single agent update sampled from GAN
 N_GAN_batches = 1024 # number of batches to train agent on
 steps = 4 # size of an episode
 project_folder = "results" # here environments / agents will be stored
+
+evaluation_only = False # when true, agent is loaded and evaluated on the environment
 
 # initialization with random agent
 
@@ -240,14 +267,16 @@ files = [os.path.join(project_folder, f) for f in files]
 # load agent if possible
 if os.path.exists(agent_file):
     agent = pc.load(open(agent_file))
+    print "Loaded agent:", agent
 else:
     agent = RNNAgent(state_size, layer_sz, act_size)
 
-optA = optimizers.Adam(alpha=0.01, beta1=0.3)
+optA = optimizers.Adam(alpha=0.001, beta1=0.3)
 optA.setup(agent)
 
+
 # main training loop
-for noise_p in [1.0, 0.5, 0.0]:
+for noise_p in [1.0, 0.0]:
 
     idx += 1
 
@@ -266,25 +295,30 @@ for noise_p in [1.0, 0.5, 0.0]:
     # fit differentiable environment for training and testing
     for fname in files:
         X, Y, Rmean = generate_data(agent, env, N_real_samples, act_size)
+        perf[fname] = float(Rmean) # shows the performance of agent on real environment
 
-        envs[fname]['X'].extend(X)
-        envs[fname]['Y'].extend(Y)
+        if not evaluation_only:
+            envs[fname]['X'].extend(X)
+            envs[fname]['Y'].extend(Y)
 
-        perf[fname] = float(Rmean) # shows the performance of agent on environment
+            fitter.FitStochastic(
+                envs[fname]['G'],
+                DiscriminatorNet(act_size, state_size + 1, layer_sz),
+                (envs[fname]['X'],envs[fname]['Y']),
+                0.001,
+                0.3,
+                GAN_training_iter)
 
-        fitter.FitStochastic(
-            envs[fname]['G'],
-            DiscriminatorNet(act_size, state_size + 1, layer_sz),
-            (envs[fname]['X'],envs[fname]['Y']),
-            GAN_training_iter)
-
-        pc.dump(envs[fname], open(fname, 'w'))
+            pc.dump(envs[fname], open(fname, 'w'))
 
     # set noise probability to zero for training
     agent.noise_probability = noise_p
 
     print "Performance:", perf
     json.dump(perf, open(perf_file, 'w'))
+
+    if evaluation_only:
+        continue
 
     # train the agent with SGD
     for reps in range(N_GAN_batches):
