@@ -315,7 +315,7 @@ for noise_p in [1.0, 0.0]:
             pc.dump(envs[fname], open(fname, 'w'))
 
     # set noise probability to zero for training
-    agent.noise_probability = noise_p
+    agent.noise_probability = 0
 
     print "Performance:", perf
     json.dump(perf, open(perf_file, 'w'))
