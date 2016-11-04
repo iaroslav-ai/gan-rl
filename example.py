@@ -242,8 +242,8 @@ layer_sz = 32 # size of NN of all environments / agents
 rnd_sz = 2 # amount of randomness per agent
 state_size = 4 # size of state of the environment
 act_size = 1  # this encodes actions
-N_real_samples = 1024 # number of samples from real environment
-GAN_training_iter = 4096*2 # grad. descent number of iterations to train GAN
+N_real_samples = 128 # number of samples from real environment
+GAN_training_iter = 2048 # grad. descent number of iterations to train GAN
 N_GAN_samples = 256 # number of trajectories for single agent update sampled from GAN
 N_GAN_batches = 1024 # number of batches to train agent on
 steps = 4 # size of an episode
@@ -298,14 +298,17 @@ for noise_p in [1.0, 0.0]:
         perf[fname] = float(Rmean) # shows the performance of agent on real environment
 
         if not evaluation_only:
-            envs[fname]['X'].extend(X)
-            envs[fname]['Y'].extend(Y)
+
+            # extend the data
+            for i in range(steps):
+                for elm, v in [('X', X), ('Y', Y)]:
+                    envs[fname][elm][i] = np.concatenate([envs[fname][elm][i], v[i]])
 
             fitter.FitStochastic(
                 envs[fname]['G'],
                 DiscriminatorNet(act_size, state_size + 1, layer_sz),
                 (envs[fname]['X'],envs[fname]['Y']),
-                0.0001,
+                0.01,
                 0.3,
                 GAN_training_iter)
 
