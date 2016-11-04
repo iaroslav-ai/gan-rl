@@ -7,7 +7,7 @@ import numpy as np
 import cPickle as pc
 
 ### ASSUMPTION: INITIAL CONDITION IS IMPORTANT TO GET RIGHT
-w_init = 100.0 # wegiht of objective for initial output of RNN
+w_init = 4.0 # wegiht of objective for initial output of RNN ~size of sequence
 
 class DOBJ(Chain):
     def __init__(self):

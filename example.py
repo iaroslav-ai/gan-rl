@@ -348,7 +348,7 @@ for noise_p in [1.0, 0.0]:
 
         Rv = evaluate_on_diff_env(envs[files[1]]['G'], N_GAN_samples, agent, steps)
 
-        print 'Avg. reward: training GAN = ', -R.data, 'testing GAN = ' -Rv.data
+        print 'Avg. reward: training GAN = ', -R.data, 'testing GAN = ', -Rv.data
 
     # save trained agent
     pc.dump(agent, open(agent_file, 'w'))
