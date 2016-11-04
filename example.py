@@ -72,7 +72,15 @@ def onehot(I, mx):
     return Z
 
 class ExampleEnv():
-    # example compatible with OpenAI gym
+    """
+    Example [very simple debug] environment compatible with OpenAI gym.
+    Agent is in discrete field of fixed size, agent's output is the probability
+    in the next step to move left or right.
+    Agent is rewarded for making a move to the right.
+    Optimal strategy:
+    1. go right untill agent is on the boundary
+    2. oscilate on the boundary: go left / right / left / right ...
+    """
 
     def __init__(self, size):
         self.size = size
@@ -238,7 +246,7 @@ def evaluate_on_diff_env(diff_env, n_sample_traj, agent, steps):
 
     return R
 
-layer_sz = 32 # size of NN of all environments / agents
+layer_sz = 64 # size of NN of all environments / agents
 rnd_sz = 2 # amount of randomness per agent
 state_size = 4 # size of state of the environment
 act_size = 1  # this encodes actions
@@ -285,7 +293,7 @@ for noise_p in [1.0, 0.0]:
     # load environments if already trained some
     for fname in files:
         if not os.path.exists(fname):
-            envs[fname] = {'G':GeneratorNet(act_size, rnd_sz, layer_sz, state_size + 1), 'X':[], 'Y':[]}
+            envs[fname] = {'G':GeneratorNet(act_size, rnd_sz, layer_sz, state_size + 1), 'X':None, 'Y':None}
         else:
             envs[fname] = pc.load(open(fname))
 
@@ -300,9 +308,13 @@ for noise_p in [1.0, 0.0]:
         if not evaluation_only:
 
             # extend the data
-            for i in range(steps):
-                for elm, v in [('X', X), ('Y', Y)]:
-                    envs[fname][elm][i] = np.concatenate([envs[fname][elm][i], v[i]])
+            if envs[fname]['X'] is None:
+                envs[fname]['X'] = X
+                envs[fname]['Y'] = Y
+            else:
+                for i in range(steps):
+                    for elm, v in [('X', X), ('Y', Y)]:
+                        envs[fname][elm][i] = np.concatenate([envs[fname][elm][i], v[i]])
 
             fitter.FitStochastic(
                 envs[fname]['G'],
@@ -310,7 +322,8 @@ for noise_p in [1.0, 0.0]:
                 (envs[fname]['X'],envs[fname]['Y']),
                 0.01,
                 0.3,
-                GAN_training_iter)
+                GAN_training_iter,
+                "Example generated [state, reward] sequences:")
 
             pc.dump(envs[fname], open(fname, 'w'))
 
@@ -335,7 +348,7 @@ for noise_p in [1.0, 0.0]:
 
         Rv = evaluate_on_diff_env(envs[files[1]]['G'], N_GAN_samples, agent, steps)
 
-        print -R.data, -Rv.data
+        print 'Avg. reward: training GAN = ', -R.data, 'testing GAN = ' -Rv.data
 
     # save trained agent
     pc.dump(agent, open(agent_file, 'w'))

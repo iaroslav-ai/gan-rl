@@ -6,6 +6,8 @@ import chainer.links as L
 import numpy as np
 import cPickle as pc
 
+### ASSUMPTION: INITIAL CONDITION IS IMPORTANT TO GET RIGHT
+w_init = 100.0 # wegiht of objective for initial output of RNN
 
 class DOBJ(Chain):
     def __init__(self):
@@ -15,17 +17,20 @@ class DOBJ(Chain):
         D.reset_state()
 
         r = 0.0
-
+        mg = w_init
         for x, yt in zip(X, Yt):
             t = D(x, yt)
-            r += F.mean_squared_error(t, t*0.0 + 1.0)
+            r += F.mean_squared_error(t, t*0.0 + 1.0)*mg
+            mg = 1.0
 
         D.reset_state()
         G.reset_state()
 
+        mg = w_init
         for x, yt in zip(X, Yt):
             f = D(x, G(x))
-            r += F.mean_squared_error(f, f * 0.0)
+            r += F.mean_squared_error(f, f * 0.0)*mg
+            mg = 1.0
 
         return r
 
@@ -40,9 +45,11 @@ class GOBJ(Chain):
 
         r = 0.0
 
+        mg = w_init
         for x in X:
             f = D(x, G(x))
-            r += F.mean_squared_error(f, f*0.0 + 1.0)
+            r += F.mean_squared_error(f, f*0.0 + 1.0)*mg
+            mg = 1.0
 
         return r
 
@@ -52,7 +59,7 @@ def tv(x, v = flag.OFF):
 
 from time import time
 
-def FitStochastic(G, D, XY, learning_rate, momentum, iters):
+def FitStochastic(G, D, XY, learning_rate, momentum, iters, pr_caption=None):
 
     X, Y = XY
 
@@ -83,6 +90,10 @@ def FitStochastic(G, D, XY, learning_rate, momentum, iters):
 
         if i % 100 == 0:
             print "iter:", i, "iter. time:", time()-st
+
+            if not pr_caption is None:
+                print pr_caption
+
             st = time()
 
             G.reset_state()
