@@ -1,44 +1,24 @@
 import chainer
 from chainer import Variable, optimizers, flag
 from chainer import Link, Chain, ChainList
-import chainer.functions as CF
+import chainer.functions as F
 import chainer.links as L
 import numpy as np
 import os
 import cPickle as pc
-import environment_fitter as fitter
+import gan_fitter_rnn as fitter
 import json
 
-def empty_vector_init(size, action_size, observation_size):
-
-    # generates empty action, observation, reward, finish vectors
-    A = np.zeros((size, action_size))
-    R = np.zeros(size)
-    F = np.zeros(size)
-    O = np.zeros((size, observation_size))
-
-    A, O, R, F = fitter.tv(A), fitter.tv(O), fitter.tv(R), fitter.tv(F)
-
-    return A, O, R, F
-
-
-class EnvironmentGRNN(Chain):
-    def __init__(self, action_size, random_size, layer_sz, observation_size):
-        super(EnvironmentGRNN, self).__init__(
-            ipt=L.StatefulGRU(action_size + random_size, layer_sz),
-            out=L.Linear(layer_sz, observation_size+2),
+class GeneratorNet(Chain):
+    def __init__(self, x_sz, rand_sz, layer_sz, output_sz):
+        super(GeneratorNet, self).__init__(
+            ipt=L.StatefulGRU(x_sz + rand_sz, layer_sz),
+            out=L.Linear(layer_sz, output_sz),
         )
+        self.rand_sz = rand_sz
 
-        self.rand_sz = random_size
-        self.action_size = action_size
-        self.obs_size = observation_size
-
-
-    def reset_state(self, size = 1):
+    def reset_state(self):
         self.ipt.reset_state()
-        A, _, _, _ = empty_vector_init(size, self.action_size, self.obs_size)
-        O, _, _ = self(A)
-        return O
 
     def __call__(self, X):
         # generate random values
@@ -46,68 +26,43 @@ class EnvironmentGRNN(Chain):
         R = Variable(R.astype("float32"))
 
         # attach random to the inputs
-        h = CF.concat([R, X])
+        h = F.concat([R, X])
         #h = R
 
         h = self.ipt(h)
         y = self.out(h)
 
         # prior knowledge: environment observation is one - hot vector
-        observation = CF.softmax(y[:, :-2])
+        obs = F.softmax(y[:, :-1])
         # prior knowledge: reward is in [0,1]
-        finished = CF.sigmoid(y[:, -2])
+        rew = F.sigmoid(y[:,[-1]])
 
-        reward = CF.sigmoid(y[:, -1])
+        y = F.concat([obs, rew])
 
-        return observation, reward, finished
+        return y
 
     def predict(self, X):
         X = fitter.tv(X)
-        O, R, F = self(X)
-        return O.data, R.data, F.data
+        Y = self(X)
+        return Y.data
 
 
 class DiscriminatorNet(Chain):
-    def __init__(self, action_size, observation_size, layer_sz):
+    def __init__(self, x_sz, outp_sz, layer_sz):
         super(DiscriminatorNet, self).__init__(
-            ipt=L.StatefulGRU(action_size + observation_size+ 2, layer_sz),  # the first linear layer
+            ipt=L.StatefulGRU(x_sz + outp_sz, layer_sz),  # the first linear layer
             out=L.Linear(layer_sz, 1),  # the feed-forward output layer
         )
-        self.action_size = action_size
-        self.obs_size = observation_size
 
-    # initial condition is treated specially
-    def reset_state(self, O):
-        """
-        This resets the discriminator net, and calculates the probability that init_obs,
-        which is output of geneartor_net at reset / initial obs., is a fake initial state
-        :param init_obs:
-        :return:
-        """
+    def reset_state(self):
         self.ipt.reset_state()
-        size = len(O.data)
-        A, _, R, F = empty_vector_init(size, self.action_size, self.obs_size)
 
-        return self(A, O, R, F)
-
-    def __call__(self, A, O, R, F):
-        """
-
-        :param X: actions
-        :param Y: tuple of observation, reward, finish
-        :return:
-        """
-        h = CF.concat((
-            A,
-            O,
-            CF.array.expand_dims.expand_dims(R, 1),
-            CF.array.expand_dims.expand_dims(F, 1))
-        )
-
+    def __call__(self, X, Y):
+        h = F.concat((X, Y))
         #h = Y
 
         h = self.ipt(h)
-        y = CF.sigmoid(self.out(h))
+        y = F.sigmoid(self.out(h))
 
         return y
 
@@ -128,12 +83,11 @@ class ExampleEnv():
     """
 
     def __init__(self, size):
-        self.obs_size = size
-        self.action_size = 1
+        self.size = size
         self.player_position = None
 
     def observe(self):
-        result = np.zeros(self.obs_size)
+        result = np.zeros(self.size)
 
         if not self.player_position is None:
             result[self.player_position] = 1.0
@@ -147,7 +101,7 @@ class ExampleEnv():
         """
         # random inital postion of player
 
-        self.player_position = np.random.randint(self.obs_size)
+        self.player_position = np.random.randint(self.size)
 
         return self.observe()
 
@@ -170,7 +124,7 @@ class ExampleEnv():
         else:
             action = -1
 
-        p = np.clip(p + action, 0, self.obs_size - 1)
+        p = np.clip(p+action, 0, self.size-1)
 
         self.player_position = p
 
@@ -198,7 +152,7 @@ class RNNAgent(Chain):
         y = self.out(h)
 
         # prior knowledge: output should be in [0, 1]
-        y = CF.sigmoid(y)
+        y = F.sigmoid(y)
 
         return y
 
@@ -229,67 +183,66 @@ class DummyAgent(Chain):
         Y = X != self.x_sz-1
         return [Y*1.0]
 
-# this collects data about real environment
-def generate_data(agent, env, N, max_steps):
+# collect the data about env
+def generate_data(agent, env, N, act_size):
 
-    I, A, O, R, F = [], [], [], [], []
+    O, A, R = [], [], []
 
-    a, o, r, f = empty_vector_init(N, env.action_size, env.obs_size)
-    I = o.data # Initial observation
-
-    Rv = 0.0
-    Ri = 1
-
-    # zero arrays of max_steps length:
-    for i in range(max_steps):
-        a, o, r, f = empty_vector_init(N, env.action_size, env.obs_size)
-        A.append(a.data) # action input
-        O.append(o.data)
-        R.append(r.data)
-        F.append(f.data*0.0 + 1.0)
-
-    # record N episodes
     for episode in range(N):
 
         agent.reset_state()
         observation = env.reset()
 
+        obvs, acts, rews = [observation], [np.zeros(act_size)], [0.0]
+
         # play
-        for i in range(max_steps):
+        for i in range(steps):
             act = agent.next([observation])[0]
             observation, reward, done, info = env.step(act)
 
-            Rv += reward
-            Ri += 1
+            obvs.append(observation)
+            acts.append(act)
+            rews.append(reward)
 
-            R[i][episode] = reward
+        O.append(obvs)
+        A.append(acts)
+        R.append(rews)
 
-            if done:
-                break
+    X, Y = [], []
 
-            A[i][episode] = act
-            O[i][episode] = observation
-            F[i][episode] = 0.0
+    # convert data to X, Y format
+    for i in range(steps):
+        x, y = [], []
 
-    return I, A, O, R, F, Rv / Ri
+        for o, a, r in zip(O, A, R):
+            x.append(a[i])
+            rw = r[i]
 
+            y.append(np.array(o[i].tolist() + [rw]))
+
+        X.append(np.array(x))
+        Y.append(np.array(y))
+
+    return X, Y, np.mean(np.array(R)[:,1:])
 
 # warning: below function should be used during training only - agent(observ) returns Chainer tensor
-def evaluate_on_diff_env(diff_env, n_sample_traj, agent, max_steps):
+def evaluate_on_diff_env(diff_env, n_sample_traj, agent, steps):
     # this function is used to sample n traj using GAN version of environment
     R = 0.0
 
-    # reset agent
+    # reset environment
+    diff_env.reset_state()
     agent.reset_state()
 
     # get initial observation
-    observations = diff_env.reset_state(n_sample_traj)
+    observations = diff_env(fitter.tv(np.zeros((n_sample_traj, 1))))[:, :-1]
 
-    for i in range(max_steps):
+    for i in range(steps):
         act = agent(observations)
-        observations, rewards, finished = diff_env(act)
-        # below is used that rewards are zero at the end of episode
-        R += CF.sum(rewards) / (-len(rewards) * max_steps)
+        obs_rew = diff_env(act)
+        rewards = obs_rew[:, -1]
+        observations = obs_rew[:, :-1]
+        R += F.sum(rewards) / (-len(rewards) * steps)
 
     return R
 
@@ -301,7 +254,7 @@ N_real_samples = 128 # number of samples from real environment
 GAN_training_iter = 2048 # grad. descent number of iterations to train GAN
 N_GAN_samples = 256 # number of trajectories for single agent update sampled from GAN
 N_GAN_batches = 1024 # number of batches to train agent on
-max_steps = 4 # maximum size of an episode
+steps = 4 # size of an episode
 project_folder = "results" # here environments / agents will be stored
 
 evaluation_only = False # when true, agent is loaded and evaluated on the environment
@@ -340,7 +293,7 @@ for noise_p in [1.0, 0.0]:
     # load environments if already trained some
     for fname in files:
         if not os.path.exists(fname):
-            envs[fname] = {'G':EnvironmentGRNN(act_size, rnd_sz, layer_sz, state_size), 'D':None}
+            envs[fname] = {'G':GeneratorNet(act_size, rnd_sz, layer_sz, state_size + 1), 'X':None, 'Y':None}
         else:
             envs[fname] = pc.load(open(fname))
 
@@ -349,23 +302,24 @@ for noise_p in [1.0, 0.0]:
 
     # fit differentiable environment for training and testing
     for fname in files:
-        I, A, O, R, F, Rmean = generate_data(agent, env, N_real_samples, max_steps)
+        X, Y, Rmean = generate_data(agent, env, N_real_samples, act_size)
         perf[fname] = float(Rmean) # shows the performance of agent on real environment
 
         if not evaluation_only:
 
             # extend the data
-            if envs[fname]['D'] is None:
-                envs[fname]['D'] = {'I':I, 'A':A, 'O':O, 'R':R, 'F':F}
+            if envs[fname]['X'] is None:
+                envs[fname]['X'] = X
+                envs[fname]['Y'] = Y
             else:
-                for i in range(max_steps):
-                    for elm, v in [('I',I), ('A',A), ('O',O), ('R',R), ('F', F)]:
+                for i in range(steps):
+                    for elm, v in [('X', X), ('Y', Y)]:
                         envs[fname][elm][i] = np.concatenate([envs[fname][elm][i], v[i]])
 
             fitter.FitStochastic(
                 envs[fname]['G'],
-                DiscriminatorNet(act_size, state_size, layer_sz),
-                envs[fname]['D'],
+                DiscriminatorNet(act_size, state_size + 1, layer_sz),
+                (envs[fname]['X'],envs[fname]['Y']),
                 0.01,
                 0.3,
                 GAN_training_iter,
@@ -388,11 +342,11 @@ for noise_p in [1.0, 0.0]:
         # reset the agent
         agent.cleargrads()
         # train
-        R = evaluate_on_diff_env(envs[files[0]]['G'], N_GAN_samples, agent, max_steps)
+        R = evaluate_on_diff_env(envs[files[0]]['G'], N_GAN_samples, agent, steps)
         R.backward()
         optA.update()
 
-        Rv = evaluate_on_diff_env(envs[files[1]]['G'], N_GAN_samples, agent, max_steps)
+        Rv = evaluate_on_diff_env(envs[files[1]]['G'], N_GAN_samples, agent, steps)
 
         print 'Avg. reward: training GAN = ', -R.data, 'testing GAN = ', -Rv.data
 
