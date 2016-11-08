@@ -16,6 +16,8 @@ class GeneratorNet(Chain):
             out=L.Linear(layer_sz, output_sz + 2),
         )
         self.rand_sz = rand_sz
+        self.act_size = x_sz
+        self.max_steps = 4
 
     def reset_state(self):
         self.ipt.reset_state()
@@ -86,6 +88,8 @@ class ExampleEnv():
     def __init__(self, size):
         self.size = size
         self.player_position = None
+        self.act_size = 1
+        self.max_steps = 4
 
     def observe(self):
         result = np.zeros(self.size)
@@ -187,7 +191,7 @@ class DummyAgent(Chain):
         return [Y*1.0]
 
 # collect the data about env
-def generate_data(agent, env, N, act_size):
+def generate_data(agent, env, N):
 
     O, A, R, E = [], [], [], []
 
@@ -197,10 +201,10 @@ def generate_data(agent, env, N, act_size):
         observation = env.reset()
 
         done = False
-        obvs, acts, rews, ends = [observation], [np.zeros(act_size)], [0.0], [0.0]
+        obvs, acts, rews, ends = [observation], [np.zeros(env.act_size)], [0.0], [0.0]
 
         # play
-        for i in range(maximum_steps):
+        for i in range(env.max_steps):
             act = agent.next([observation])[0]
 
             if done: # if episode is done - pad the episode to have max_steps length
@@ -222,7 +226,7 @@ def generate_data(agent, env, N, act_size):
     X, Y = [], []
 
     # convert data to X, Y format
-    for i in range(maximum_steps):
+    for i in range(env.max_steps):
         x, y = [], []
 
         for o, a, r, e in zip(O, A, R, E):
@@ -235,24 +239,24 @@ def generate_data(agent, env, N, act_size):
     return X, Y, np.mean(np.array(R)[:,1:])
 
 # warning: below function should be used during training only - agent(observ) returns Chainer tensor
-def evaluate_on_diff_env(diff_env, n_sample_traj, agent, steps):
+def evaluate_on_diff_env(env, n_sample_traj, agent, max_steps):
     # this function is used to sample n traj using GAN version of environment
     R = 0.0
 
     # reset environment
-    diff_env.reset_state()
+    env.reset_state()
     agent.reset_state()
 
     # get initial observation
-    observations = diff_env(fitter.tv(np.zeros((n_sample_traj, 1))))[:, :-2]
+    observations = env(fitter.tv(np.zeros((n_sample_traj, env.act_size))))[:, :-2]
 
-    for i in range(steps):
+    for i in range(env.max_steps):
         act = agent(observations)
-        obs_rew = diff_env(act)
+        obs_rew = env(act)
         rewards = obs_rew[:, -2]
         ends = obs_rew[:, -1]
         observations = obs_rew[:, :-2]
-        R += F.sum(rewards * (1.0 - ends)) / (-len(rewards) * steps)
+        R += F.sum(rewards * (1.0 - ends)) / (-len(rewards) * max_steps)
 
     return R
 
@@ -264,7 +268,6 @@ N_real_samples = 128 # number of samples from real environment
 GAN_training_iter = 2048 # grad. descent number of iterations to train GAN
 N_GAN_samples = 256 # number of trajectories for single agent update sampled from GAN
 N_GAN_batches = 1024 # number of batches to train agent on
-maximum_steps = 4 # size of an episode
 project_folder = "results" # here environments / agents will be stored
 
 evaluation_only = False # when true, agent is loaded and evaluated on the environment
@@ -314,7 +317,7 @@ for noise_p in noise_decay_schedule:
 
     # fit differentiable environment for training and testing
     for fname in files:
-        X, Y, Rmean = generate_data(agent, env, N_real_samples, act_size)
+        X, Y, Rmean = generate_data(agent, env, N_real_samples)
         perf[fname] = float(Rmean) # shows the performance of agent on real environment
 
         if not evaluation_only:
@@ -324,7 +327,7 @@ for noise_p in noise_decay_schedule:
                 envs[fname]['X'] = X
                 envs[fname]['Y'] = Y
             else:
-                for i in range(maximum_steps):
+                for i in range(env.max_steps):
                     for elm, v in [('X', X), ('Y', Y)]:
                         envs[fname][elm][i] = np.concatenate([envs[fname][elm][i], v[i]])
 
@@ -354,11 +357,11 @@ for noise_p in noise_decay_schedule:
         # reset the agent
         agent.cleargrads()
         # train
-        R = evaluate_on_diff_env(envs[files[0]]['G'], N_GAN_samples, agent, maximum_steps)
+        R = evaluate_on_diff_env(envs[files[0]]['G'], N_GAN_samples, agent)
         R.backward()
         optA.update()
 
-        Rv = evaluate_on_diff_env(envs[files[1]]['G'], N_GAN_samples, agent, maximum_steps)
+        Rv = evaluate_on_diff_env(envs[files[1]]['G'], N_GAN_samples, agent)
 
         print 'Avg. reward: training GAN = ', -R.data, 'testing GAN = ', -Rv.data
 
