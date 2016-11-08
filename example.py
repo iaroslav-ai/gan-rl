@@ -6,7 +6,7 @@ import chainer.links as L
 import numpy as np
 import os
 import cPickle as pc
-import gan_fitter_rnn as fitter
+import gan_rl_fitter as fitter
 import json
 
 class GeneratorNet(Chain):
@@ -137,12 +137,13 @@ class ExampleEnv():
         return self.observe(), reward, done, None
 
 class RNNAgent(Chain):
-    def __init__(self, x_sz, layer_sz, act_sz):
+    def __init__(self, obs_size, layer_sz, act_sz):
         super(RNNAgent, self).__init__(
-            ipt=L.StatefulGRU(x_sz, layer_sz),
+            ipt=L.StatefulGRU(obs_size, layer_sz),
             out=L.Linear(layer_sz, act_sz),
         )
         self.noise_probability = 0.0 # probability to output noise
+        self.action_size = act_sz
 
     def reset_state(self):
         self.ipt.reset_state()
@@ -260,7 +261,7 @@ rnd_sz = 2 # amount of randomness per agent
 state_size = 4 # size of state of the environment
 act_size = 1  # this encodes actions
 N_real_samples = 128 # number of samples from real environment
-GAN_training_iter = 0 # grad. descent number of iterations to train GAN
+GAN_training_iter = 2048 # grad. descent number of iterations to train GAN
 N_GAN_samples = 256 # number of trajectories for single agent update sampled from GAN
 N_GAN_batches = 1024 # number of batches to train agent on
 maximum_steps = 4 # size of an episode
@@ -271,6 +272,8 @@ evaluation_only = False # when true, agent is loaded and evaluated on the enviro
 # initialization with random agent
 
 env = ExampleEnv(state_size)
+noise_decay_schedule = [1.0, 0.0]
+
 idx = 0
 
 files = ['train.bin', 'validate.bin']
@@ -291,8 +294,9 @@ else:
 optA = optimizers.Adam(alpha=0.001, beta1=0.9)
 optA.setup(agent)
 
+
 # main training loop
-for noise_p in [1.0, 0.0]:
+for noise_p in noise_decay_schedule:
 
     idx += 1
 
