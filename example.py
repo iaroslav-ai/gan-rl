@@ -318,6 +318,9 @@ for noise_p in noise_decay_schedule:
     # fit differentiable environment for training and testing
     for fname in files:
         X, Y, Rmean = generate_data(agent, env, N_real_samples)
+
+        print Y[3]
+
         perf[fname] = float(Rmean) # shows the performance of agent on real environment
 
         if not evaluation_only:
