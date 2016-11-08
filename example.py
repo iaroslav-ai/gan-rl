@@ -13,7 +13,7 @@ class GeneratorNet(Chain):
     def __init__(self, x_sz, rand_sz, layer_sz, output_sz):
         super(GeneratorNet, self).__init__(
             ipt=L.StatefulGRU(x_sz + rand_sz, layer_sz),
-            out=L.Linear(layer_sz, output_sz),
+            out=L.Linear(layer_sz, output_sz + 2),
         )
         self.rand_sz = rand_sz
 
@@ -33,11 +33,12 @@ class GeneratorNet(Chain):
         y = self.out(h)
 
         # prior knowledge: environment observation is one - hot vector
-        obs = F.softmax(y[:, :-1])
+        obs = F.softmax(y[:, :-2])
         # prior knowledge: reward is in [0,1]
-        rew = F.sigmoid(y[:,[-1]])
+        rew = F.sigmoid(y[:,[-2]])
+        fin = F.sigmoid(y[:, [-1]])
 
-        y = F.concat([obs, rew])
+        y = F.concat([obs, rew, fin])
 
         return y
 
@@ -48,9 +49,9 @@ class GeneratorNet(Chain):
 
 
 class DiscriminatorNet(Chain):
-    def __init__(self, x_sz, outp_sz, layer_sz):
+    def __init__(self, action_size, observation_size, layer_sz):
         super(DiscriminatorNet, self).__init__(
-            ipt=L.StatefulGRU(x_sz + outp_sz, layer_sz),  # the first linear layer
+            ipt=L.StatefulGRU(action_size + observation_size + 2, layer_sz),  # the first linear layer
             out=L.Linear(layer_sz, 1),  # the feed-forward output layer
         )
 
@@ -101,7 +102,7 @@ class ExampleEnv():
         """
         # random inital postion of player
 
-        self.player_position = np.random.randint(self.size)
+        self.player_position = np.random.randint(self.size-1)
 
         return self.observe()
 
@@ -131,8 +132,9 @@ class ExampleEnv():
         # stupid reward: going to right rewards
         reward = max(0, p - old_p)
 
+        done = p == (self.size -1)
         # observation, reward, done (is episode finished?), info
-        return self.observe(), reward, False, None
+        return self.observe(), reward, done, None
 
 class RNNAgent(Chain):
     def __init__(self, x_sz, layer_sz, act_sz):
@@ -180,45 +182,51 @@ class DummyAgent(Chain):
 
     def next(self, X):
         X = np.argmax(X, axis=1)
-        Y = X != self.x_sz-1
+        Y = X != self.x_sz-2
         return [Y*1.0]
 
 # collect the data about env
 def generate_data(agent, env, N, act_size):
 
-    O, A, R = [], [], []
+    O, A, R, E = [], [], [], []
 
     for episode in range(N):
 
         agent.reset_state()
         observation = env.reset()
 
-        obvs, acts, rews = [observation], [np.zeros(act_size)], [0.0]
+        done = False
+        obvs, acts, rews, ends = [observation], [np.zeros(act_size)], [0.0], [0.0]
 
         # play
-        for i in range(steps):
+        for i in range(maximum_steps):
             act = agent.next([observation])[0]
-            observation, reward, done, info = env.step(act)
 
+            if done: # if episode is done - pad the episode to have max_steps length
+                reward = 0.0
+            else:
+                observation, reward, done, info = env.step(act)
+
+            rews.append(reward)
             obvs.append(observation)
             acts.append(act)
-            rews.append(reward)
+            ends.append(done*1.0)
+
 
         O.append(obvs)
         A.append(acts)
         R.append(rews)
+        E.append(ends)
 
     X, Y = [], []
 
     # convert data to X, Y format
-    for i in range(steps):
+    for i in range(maximum_steps):
         x, y = [], []
 
-        for o, a, r in zip(O, A, R):
+        for o, a, r, e in zip(O, A, R, E):
             x.append(a[i])
-            rw = r[i]
-
-            y.append(np.array(o[i].tolist() + [rw]))
+            y.append(np.array(o[i].tolist() + [r[i], e[i]]))
 
         X.append(np.array(x))
         Y.append(np.array(y))
@@ -235,14 +243,15 @@ def evaluate_on_diff_env(diff_env, n_sample_traj, agent, steps):
     agent.reset_state()
 
     # get initial observation
-    observations = diff_env(fitter.tv(np.zeros((n_sample_traj, 1))))[:, :-1]
+    observations = diff_env(fitter.tv(np.zeros((n_sample_traj, 1))))[:, :-2]
 
     for i in range(steps):
         act = agent(observations)
         obs_rew = diff_env(act)
-        rewards = obs_rew[:, -1]
-        observations = obs_rew[:, :-1]
-        R += F.sum(rewards) / (-len(rewards) * steps)
+        rewards = obs_rew[:, -2]
+        ends = obs_rew[:, -1]
+        observations = obs_rew[:, :-2]
+        R += F.sum(rewards * (1.0 - ends)) / (-len(rewards) * steps)
 
     return R
 
@@ -251,10 +260,10 @@ rnd_sz = 2 # amount of randomness per agent
 state_size = 4 # size of state of the environment
 act_size = 1  # this encodes actions
 N_real_samples = 128 # number of samples from real environment
-GAN_training_iter = 2048 # grad. descent number of iterations to train GAN
+GAN_training_iter = 0 # grad. descent number of iterations to train GAN
 N_GAN_samples = 256 # number of trajectories for single agent update sampled from GAN
 N_GAN_batches = 1024 # number of batches to train agent on
-steps = 4 # size of an episode
+maximum_steps = 4 # size of an episode
 project_folder = "results" # here environments / agents will be stored
 
 evaluation_only = False # when true, agent is loaded and evaluated on the environment
@@ -279,9 +288,8 @@ if os.path.exists(agent_file):
 else:
     agent = RNNAgent(state_size, layer_sz, act_size)
 
-optA = optimizers.Adam(alpha=0.001, beta1=0.3)
+optA = optimizers.Adam(alpha=0.001, beta1=0.9)
 optA.setup(agent)
-
 
 # main training loop
 for noise_p in [1.0, 0.0]:
@@ -293,7 +301,7 @@ for noise_p in [1.0, 0.0]:
     # load environments if already trained some
     for fname in files:
         if not os.path.exists(fname):
-            envs[fname] = {'G':GeneratorNet(act_size, rnd_sz, layer_sz, state_size + 1), 'X':None, 'Y':None}
+            envs[fname] = {'G':GeneratorNet(act_size, rnd_sz, layer_sz, state_size), 'X':None, 'Y':None}
         else:
             envs[fname] = pc.load(open(fname))
 
@@ -312,13 +320,13 @@ for noise_p in [1.0, 0.0]:
                 envs[fname]['X'] = X
                 envs[fname]['Y'] = Y
             else:
-                for i in range(steps):
+                for i in range(maximum_steps):
                     for elm, v in [('X', X), ('Y', Y)]:
                         envs[fname][elm][i] = np.concatenate([envs[fname][elm][i], v[i]])
 
             fitter.FitStochastic(
                 envs[fname]['G'],
-                DiscriminatorNet(act_size, state_size + 1, layer_sz),
+                DiscriminatorNet(act_size, state_size, layer_sz),
                 (envs[fname]['X'],envs[fname]['Y']),
                 0.01,
                 0.3,
@@ -342,11 +350,11 @@ for noise_p in [1.0, 0.0]:
         # reset the agent
         agent.cleargrads()
         # train
-        R = evaluate_on_diff_env(envs[files[0]]['G'], N_GAN_samples, agent, steps)
+        R = evaluate_on_diff_env(envs[files[0]]['G'], N_GAN_samples, agent, maximum_steps)
         R.backward()
         optA.update()
 
-        Rv = evaluate_on_diff_env(envs[files[1]]['G'], N_GAN_samples, agent, steps)
+        Rv = evaluate_on_diff_env(envs[files[1]]['G'], N_GAN_samples, agent, maximum_steps)
 
         print 'Avg. reward: training GAN = ', -R.data, 'testing GAN = ', -Rv.data
 
