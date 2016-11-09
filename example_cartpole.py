@@ -131,7 +131,7 @@ fitter.train_gan_rl(
     project_folder="results",
     noise_decay_schedule=[1.0, 0.5, 0.25, 0.1, 0.0, 0.0],
     N_real_samples=32,
-    N_GAN_batches=1024,
+    N_GAN_batches=256,
     N_GAN_samples=256,
     GAN_tr_lr=0.01,
     GAN_tr_mm=0.3,

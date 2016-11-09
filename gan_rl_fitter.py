@@ -171,7 +171,7 @@ def generate_data(agent, env, N):
     return X, Y, np.mean(np.array(R)[:,1:])
 
 # warning: below function should be used during training only, eg agent(observ) returns Chainer tensor
-def evaluate_on_diff_env(env, n_sample_traj, agent, max_steps):
+def evaluate_on_diff_env(env, n_sample_traj, agent):
     # this function is used to sample n traj using GAN version of environment
     R = 0.0
 
@@ -182,13 +182,13 @@ def evaluate_on_diff_env(env, n_sample_traj, agent, max_steps):
     # get initial observation
     observations = env(tv(np.zeros((n_sample_traj, env.act_size))))[:, :-2]
 
-    for i in range(env.max_steps):
+    for i in range(env.spec.timestep_limit):
         act = agent(observations)
         obs_rew = env(act)
         rewards = obs_rew[:, -2]
         ends = obs_rew[:, -1]
         observations = obs_rew[:, :-2]
-        R += F.sum(rewards * (1.0 - ends)) / (-len(rewards) * max_steps)
+        R += F.sum(rewards * (1.0 - ends)) / (-len(rewards) * env.spec.timestep_limit)
 
     return R
 
@@ -273,7 +273,7 @@ def train_gan_rl(CreateGenerator, CreateDiscriminator, CreateActor,
                     envs[fname]['X'] = X
                     envs[fname]['Y'] = Y
                 else:
-                    for i in range(Environment.max_steps):
+                    for i in range(Environment.spec.timestep_limit):
                         for elm, v in [('X', X), ('Y', Y)]:
                             envs[fname][elm][i] = np.concatenate([envs[fname][elm][i], v[i]])
 
