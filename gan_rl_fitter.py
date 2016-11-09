@@ -5,6 +5,13 @@ import chainer.functions as F
 import chainer.links as L
 import numpy as np
 import cPickle as pc
+import os
+import json
+
+# miscellaneous class
+class EnvSpec():
+    def __init__(self, max_steps):
+        self.timestep_limit = max_steps
 
 ### ASSUMPTION: INITIAL CONDITION IS IMPORTANT TO GET RIGHT
 w_init = 4.0 # wegiht of objective for initial output of RNN ~size of sequence
@@ -88,9 +95,9 @@ def FitStochastic(G, D, XY, learning_rate, momentum, iters, pr_caption=None):
         optG.update()
 
 
-        if i % 100 == 0:
+        if i % 10 == 0:
             print "iter:", i, "iter. time:", time()-st
-
+            """
             if not pr_caption is None:
                 print pr_caption
 
@@ -105,23 +112,203 @@ def FitStochastic(G, D, XY, learning_rate, momentum, iters, pr_caption=None):
                 Yi = [np.round(yp.data[j].astype('float64'), 1).tolist() for yp in Yp]
 
                 print Yi
-
-            res = np.zeros((10, 10))
-
-            for rep in range(10):
-                for mrep in range(10):
-
-                    G.reset_state()
-
-                    v = []
-
-                    for x, yt in zip(X, Y):
-                        yp = G(x)
-                        v.append(np.mean(abs(yt.data - yp.data)))
-
-                    res[rep, mrep] = np.mean(v)
-
-            tr_perf = np.mean(np.min(res, axis=1))
-            print "Error estimate:", tr_perf
+            """
 
 
+
+
+
+# collect the data about env
+def generate_data(agent, env, N):
+
+    O, A, R, E = [], [], [], []
+
+    for episode in range(N):
+
+        print "Real ep. ", episode
+
+        agent.reset_state()
+        observation = env.reset()
+
+        done = False
+        obvs, acts, rews, ends = [observation], [np.zeros(agent.action_size)], [0.0], [0.0]
+
+        # play
+        for i in range(env.spec.timestep_limit):
+            act, act_unformatted = agent.next([observation])
+            act = act[0]
+            act_unformatted = act_unformatted[0]
+
+            if done: # if episode is done - pad the episode to have max_steps length
+                reward = 0.0
+            else:
+                observation, reward, done, info = env.step(act)
+
+            rews.append(reward)
+            obvs.append(observation)
+            acts.append(act_unformatted)
+            ends.append(done*1.0)
+
+
+        O.append(obvs)
+        A.append(acts)
+        R.append(rews)
+        E.append(ends)
+
+    X, Y = [], []
+
+    # convert data to X, Y format
+    for i in range(env.spec.timestep_limit):
+        x, y = [], []
+
+        for o, a, r, e in zip(O, A, R, E):
+            x.append(a[i])
+            y.append(np.array(o[i].tolist() + [r[i], e[i]]))
+
+        X.append(np.array(x))
+        Y.append(np.array(y))
+
+    return X, Y, np.mean(np.array(R)[:,1:])
+
+# warning: below function should be used during training only, eg agent(observ) returns Chainer tensor
+def evaluate_on_diff_env(env, n_sample_traj, agent, max_steps):
+    # this function is used to sample n traj using GAN version of environment
+    R = 0.0
+
+    # reset environment
+    env.reset_state()
+    agent.reset_state()
+
+    # get initial observation
+    observations = env(tv(np.zeros((n_sample_traj, env.act_size))))[:, :-2]
+
+    for i in range(env.max_steps):
+        act = agent(observations)
+        obs_rew = env(act)
+        rewards = obs_rew[:, -2]
+        ends = obs_rew[:, -1]
+        observations = obs_rew[:, :-2]
+        R += F.sum(rewards * (1.0 - ends)) / (-len(rewards) * max_steps)
+
+    return R
+
+
+def train_gan_rl(CreateGenerator, CreateDiscriminator, CreateActor,
+                 Environment,
+                 project_folder,
+                 noise_decay_schedule,
+                 N_real_samples, N_GAN_batches, N_GAN_samples,
+                 GAN_tr_lr, GAN_tr_mm, GAN_training_iter,
+                 evaluation_only):
+
+    """
+
+    This function performs reinforcement learning of an actor on environment using
+    combination of generative adversarial neural network model or real environment
+    and gradient descent.
+
+    :param CreateGenerator:
+    :param CreateDiscriminator:
+    :param CreateActor:
+    :param Environment:
+    :param project_folder:
+    :param noise_decay_schedule:
+    :param N_real_samples:
+    :param N_GAN_batches:
+    :param N_GAN_samples:
+    :param GAN_tr_lr:
+    :param GAN_tr_mm:
+    :param GAN_training_iter:
+    :param evaluation_only:
+    :return:
+    """
+
+    idx = 0
+
+    files = ['train.bin', 'validate.bin']
+    agent_file = 'agent.bin'
+    perf_file = 'stats.json'
+
+    agent_file = os.path.join(project_folder, agent_file)
+    perf_file = os.path.join(project_folder, perf_file)
+    files = [os.path.join(project_folder, f) for f in files]
+
+    # load agent if possible
+    if os.path.exists(agent_file):
+        agent = pc.load(open(agent_file))
+        print "Loaded agent:", agent
+    else:
+        agent = CreateActor()
+
+    optA = optimizers.Adam(alpha=0.001, beta1=0.9)
+    optA.setup(agent)
+
+    # main training loop
+    for noise_p in noise_decay_schedule:
+
+        idx += 1
+
+        envs, perf = {}, {}
+
+        # load environments if already trained some
+        for fname in files:
+            if not os.path.exists(fname):
+                envs[fname] = {'G': CreateGenerator(), 'X': None, 'Y': None}
+            else:
+                envs[fname] = pc.load(open(fname))
+
+        # set temporarily noise probability != 0
+        agent.noise_probability = noise_p
+
+        # fit differentiable environment for training and testing
+        for fname in files:
+            X, Y, Rmean = generate_data(agent, Environment, N_real_samples)
+
+            perf[fname] = float(Rmean)  # shows the performance of agent on real environment
+
+            if not evaluation_only:
+
+                # extend the data
+                if envs[fname]['X'] is None:
+                    envs[fname]['X'] = X
+                    envs[fname]['Y'] = Y
+                else:
+                    for i in range(Environment.max_steps):
+                        for elm, v in [('X', X), ('Y', Y)]:
+                            envs[fname][elm][i] = np.concatenate([envs[fname][elm][i], v[i]])
+
+                FitStochastic(
+                    envs[fname]['G'],
+                    CreateDiscriminator(),
+                    (envs[fname]['X'], envs[fname]['Y']),
+                    GAN_tr_lr,
+                    GAN_tr_mm,
+                    GAN_training_iter,
+                    "Example generated [state, reward] sequences:")
+
+                pc.dump(envs[fname], open(fname, 'w'))
+
+        # set noise probability to zero for training
+        agent.noise_probability = 0
+
+        print "Performance:", perf
+        json.dump(perf, open(perf_file, 'w'))
+
+        if evaluation_only:
+            continue
+
+        # train the agent with SGD
+        for reps in range(N_GAN_batches):
+            # reset the agent
+            agent.cleargrads()
+            # train
+            R = evaluate_on_diff_env(envs[files[0]]['G'], N_GAN_samples, agent)
+            R.backward()
+            optA.update()
+
+            Rv = evaluate_on_diff_env(envs[files[1]]['G'], N_GAN_samples, agent)
+
+            print 'Avg. reward: training GAN = ', -R.data, 'testing GAN = ', -Rv.data
+
+        # save trained agent
+        pc.dump(agent, open(agent_file, 'w'))
