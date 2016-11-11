@@ -1,3 +1,16 @@
+"""
+Example of learning with GANs. See ExampleEnv for description of environment used.
+
+As you run this script sufficiently long, the results of evaluation of trained agent
+will appear in "results" folder, in stats.json. There you will see average reward
+for training and validation GANs. For the environment defined in this file, best
+possible average reward is ~0.63. Most of the time final agent's performance is close
+to this value and is somewhere in 0.58 - 0.62.
+
+Important: the GAN fitting procedure needs some further improvement, so quality
+of environment model varies from run to run.
+"""
+
 import chainer
 from chainer import Variable, optimizers, flag
 from chainer import Link, Chain, ChainList
@@ -32,6 +45,7 @@ class GeneratorNet(Chain):
         #h = R
 
         h = self.ipt(h)
+        #h = F.dropout(h)
         y = self.out(h)
 
         # prior knowledge: environment observation is one - hot vector
@@ -81,7 +95,7 @@ class ExampleEnv():
     """
     Example [very simple debug] environment compatible with OpenAI gym.
     Agent is in discrete field of fixed size, agent's output is the probability
-    in the next step to move left or right.
+    to move left or right in the next step.
     Agent is rewarded for making a move to the right.
     Optimal strategy:
     1. go right untill agent is on the boundary
@@ -109,7 +123,7 @@ class ExampleEnv():
         """
         # random inital postion of player
 
-        self.player_position = np.random.randint(self.size-1)
+        self.player_position = np.random.randint(self.size)
 
         return self.observe()
 
@@ -139,7 +153,8 @@ class ExampleEnv():
         # stupid reward: going to right rewards
         reward = max(0, p - old_p)
 
-        done = p == (self.size -1)
+        #done = p == (self.size -1)
+        done = False
         # observation, reward, done (is episode finished?), info
         return self.observe(), reward, done, None
 
@@ -177,7 +192,7 @@ class RNNAgent(Chain):
 
         return Y, Y
 
-# ground truth agent. Achieves aroun 0.62 average reward
+# ground truth agent. Achieves around 0.62 average reward
 class DummyAgent(Chain):
     def __init__(self, x_sz, layer_sz, act_sz):
         self.x_sz = x_sz
@@ -210,6 +225,6 @@ fitter.train_gan_rl(
     N_GAN_samples=256,
     GAN_tr_lr=0.01,
     GAN_tr_mm=0.3,
-    GAN_training_iter=2048,
+    GAN_training_iter=2 ** 10,
     evaluation_only=False
 )

@@ -2,11 +2,11 @@
 
 Training Reinforcement Learning agent using derivative of Generative Recurrent Neural Network which models jointly environment and reward. Run "example.py" to see it working.
 
-It is assumed that environment observation is a vector. Currently for simplicity episodes of fixed size are taken (variable lenght can be achieved with padding).
+It is assumed that environment observation is a vector of a fixed size. 
 
 On the high level the code works as follows:
 
-1. Agent RNN is initialized, probability of agent just outputing random action is set to 1.0.
+1. Agent RNN is initialized, probability of agent just outputting random action is set to 1.0.
 
 2. Agent acts in an environment, generating data about the environment. 
 
@@ -17,3 +17,5 @@ On the high level the code works as follows:
 5. Agent is trained to optimize average reward on training environment using gradient descent over outputs of training environment GAN. Agent training stops when performance on valiadation GAN starts to decrease.
 
 6. Probability of agent outputing random action is decreased. Repeat from step 2 until terminating criterion (fixed number of iterations).
+
+**Important:** this is a work in progress, thus expect bugs and things changing.

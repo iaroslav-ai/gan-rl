@@ -95,9 +95,15 @@ def FitStochastic(G, D, XY, learning_rate, momentum, iters, pr_caption=None):
         optG.update()
 
 
+
+
         if i % 10 == 0:
-            print "iter:", i, "iter. time:", time()-st
-            """
+
+            #for p in G.params():
+            #    p.data = p.data + 0.5*np.random.randn(*p.data.shape).astype('float32')
+
+            print "iter:", i, "/", iters, "iter. time:", time()-st
+
             if not pr_caption is None:
                 print pr_caption
 
@@ -112,7 +118,7 @@ def FitStochastic(G, D, XY, learning_rate, momentum, iters, pr_caption=None):
                 Yi = [np.round(yp.data[j].astype('float64'), 1).tolist() for yp in Yp]
 
                 print Yi
-            """
+            """"""
 
 
 
@@ -284,7 +290,7 @@ def train_gan_rl(CreateGenerator, CreateDiscriminator, CreateActor,
                     GAN_tr_lr,
                     GAN_tr_mm,
                     GAN_training_iter,
-                    "Example generated [state, reward] sequences:")
+                    "Example generated [state_0, state_1, ..., reward, finished] sequences:")
 
                 pc.dump(envs[fname], open(fname, 'w'))
 
